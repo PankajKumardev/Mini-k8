@@ -8,22 +8,9 @@ It's a learning-oriented re-implementation of the core control-loop pattern that
 
 ## Architecture
 
-```
-                    ┌──────────────┐
-   POST /job  ──▶   │  API Server  │  ── inserts job (state: SUBMITTED) ──▶  Postgres
-                    │  (Express)   │
-                    └──────────────┘
-                                                       ┌─────────────┐
-   BullMQ repeatable schedulers (Valkey/Redis)  ──▶    │   Workers   │
-                                                       └─────────────┘
-                                                              │
-   every 2s   job-dispatcher  ──  SUBMITTED ─▶ RUNNABLE       │
-   every 5s   job-cri         ──  RUNNABLE  ─▶ RUNNING  (docker pull + run)
-   every 10s  job-watch       ──  RUNNING   ─▶ SUCCEEDED (on container exit)
-                                                              │
-                                                              ▼
-                                                          Docker Engine
-```
+![Mini-k8 architecture](./system-design.png)
+
+A user submits a job to the API, which persists it to Postgres as `SUBMITTED`. BullMQ schedulers (backed by Valkey) trigger three reconciler loops that advance the job through its state machine and ultimately run it as a Docker container.
 
 ### Components
 
