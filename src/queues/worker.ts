@@ -8,11 +8,16 @@ import Docker from "dockerode";
 const docker = new Docker(); 
 
 function pullImage(image: string) {
-    return new Promise<void>(async (res) => {
-        const stream = await docker.pull(image) 
-        docker.modem.followProgress(stream, () => {
-             res(); 
-        }) 
+    return new Promise<void>(async (res, rej) => {
+        try {
+            const stream = await docker.pull(image) 
+            docker.modem.followProgress(stream, (err) => {
+                 if (err) rej(err);
+                 else res(); 
+            }) 
+        } catch (err) {
+            rej(err);
+        }
     })
 }
 
@@ -73,30 +78,37 @@ export const jobCriWorker = new Worker("job-cri", async () => {
         console.log(`[jobCriWorker] : Found  ${jobIds.length} jobs in Runnable State : `, jobIds);
 
         for(const jobId of jobIds){
-            const [job]  =  await db.select().from(jobsStateTable).where(eq(jobsStateTable.id, jobId));
-            const checkImageResult = await docker.listImages({filters: {
-                reference : [`${job.image}:latest`],
-            }})
+            try {
+                const [job]  =  await db.select().from(jobsStateTable).where(eq(jobsStateTable.id, jobId));
+                const checkImageResult = await docker.listImages({filters: {
+                    reference : [`${job.image}:latest`],
+                }})
 
-            if(!checkImageResult || checkImageResult.length <= 0){
-                console.log(`Pulling Image ${job.image}:latest`);
-                await pullImage(`${job.image}:latest`);
+                if(!checkImageResult || checkImageResult.length <= 0){
+                    console.log(`Pulling Image ${job.image}:latest`);
+                    await pullImage(`${job.image}:latest`);
+                }
+
+                const c = await docker.createContainer({
+                    Image : `${job.image}:latest`,
+                    Tty : false,
+                    Cmd : job.cmd ? ["sh", "-c", job.cmd] : undefined,
+                    HostConfig : {
+                        AutoRemove : false
+                    },
+                })
+                await c.start();
+                console.log(`Container is Up and Running with ID : ${c.id}`);
+                await tx.update(jobsStateTable).set({
+                    containerId : c.id, 
+                    state : jobStatusEnumValues[2]
+                }).where(eq(jobsStateTable.id, jobId));
+            } catch (err) {
+                console.error(`[jobCriWorker] : job ${jobId} failed to start, marking FAILED : `, err);
+                await tx.update(jobsStateTable).set({
+                    state : jobStatusEnumValues[3]
+                }).where(eq(jobsStateTable.id, jobId));
             }
-
-            const c = await docker.createContainer({
-                Image : `${job.image}:latest`,
-                Tty : false,
-                Cmd : job.cmd ? ["sh", "-c", job.cmd] : undefined,
-                HostConfig : {
-                    AutoRemove : false
-                },
-            })
-            await c.start();
-            console.log(`Container is Up and Running with ID : ${c.id}`);
-            await tx.update(jobsStateTable).set({
-                containerId : c.id, 
-                state : jobStatusEnumValues[2]
-            }).where(eq(jobsStateTable.id, jobId));
         }
     }, {
         accessMode : 'read write', 
@@ -127,18 +139,22 @@ export const jobWatcherWorker = new Worker("job-watch", async () => {
         const jobIds = result.rows.map((e) => e.id as string);
 
         for(const jobId of jobIds){
-            const [job] = await db.select().from(jobsStateTable).where(eq(jobsStateTable.id,jobId));
+            try {
+                const [job] = await db.select().from(jobsStateTable).where(eq(jobsStateTable.id,jobId));
 
-            if(job.containerId){
-                 const container = docker.getContainer(job.containerId);
-                 const containerStatus = await container.inspect();
-                 if(containerStatus.State.Status ===  'exited'){
-                    await tx.update(jobsStateTable).set({
-                        state : jobStatusEnumValues[4],
-                        containerId : null,
-                    }).where(eq(jobsStateTable.id,jobId));
-                    await container.remove(); 
-                 }
+                if(job.containerId){
+                     const container = docker.getContainer(job.containerId);
+                     const containerStatus = await container.inspect();
+                     if(containerStatus.State.Status ===  'exited'){
+                        await tx.update(jobsStateTable).set({
+                            state : jobStatusEnumValues[4],
+                            containerId : null,
+                        }).where(eq(jobsStateTable.id,jobId));
+                        await container.remove(); 
+                     }
+                }
+            } catch (err) {
+                console.error(`[job-watch] : job ${jobId} watch failed : `, err);
             }
 
         }
