@@ -7,8 +7,8 @@ import Docker from "dockerode";
 
 const docker = new Docker(); 
 
-function pullImage(image){
-    return new Promise( async (res)=> {
+function pullImage(image: string) {
+    return new Promise<void>(async (res) => {
         const stream = await docker.pull(image) 
         docker.modem.followProgress(stream, () => {
              res(); 
@@ -31,7 +31,7 @@ export const jobDispatchWorker = new Worker("job-dispatcher", async () => {
         `;
 
         const result = await tx.execute(stmt);
-        const jobIds = result.rows.map((e) => e.id);
+        const jobIds = result.rows.map((e) => e.id as string);
 
         console.log(`[job-dispatcher] : Found  ${jobIds.length} jobs in Submitted State : `, jobIds);
         
@@ -68,7 +68,7 @@ export const jobCriWorker = new Worker("job-cri", async () => {
         `;
 
         const result = await tx.execute(stmt);
-        const jobIds = result.rows.map((e) => e.id);
+        const jobIds = result.rows.map((e) => e.id as string);
 
         console.log(`[jobCriWorker] : Found  ${jobIds.length} jobs in Runnable State : `, jobIds);
 
@@ -86,7 +86,7 @@ export const jobCriWorker = new Worker("job-cri", async () => {
             const c = await docker.createContainer({
                 Image : `${job.image}:latest`,
                 Tty : false,
-                Cmd : job.cmd,
+                Cmd : job.cmd ? ["sh", "-c", job.cmd] : undefined,
                 HostConfig : {
                     AutoRemove : false
                 },
@@ -124,7 +124,7 @@ export const jobWatcherWorker = new Worker("job-watch", async () => {
         `;
 
         const result = await tx.execute(stmt);
-        const jobIds = result.rows.map((e) => e.id);
+        const jobIds = result.rows.map((e) => e.id as string);
 
         for(const jobId of jobIds){
             const [job] = await db.select().from(jobsStateTable).where(eq(jobsStateTable.id,jobId));
